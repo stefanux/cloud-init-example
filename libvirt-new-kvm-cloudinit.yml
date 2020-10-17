@@ -1,0 +1,137 @@
+---
+# needed packages on target-Host (depends on pytho3 or 2): 
+# python3-libvirt / python-libvirt + python3-lxml / python-lxml
+# Error is "The `libvirt` module is not importable. Check the requirements" -> see var "libvirt_host_python3" in tcharl.ansible_role_libvirt_host
+#
+#  debian 10: http://cdimage.debian.org/cdimage/openstack/current-10/debian-10-openstack-amd64.qcow2
+#  ubuntu 20.04: http://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
+#  centos8: https://cloud.centos.org/centos/8/x86_64/images/CentOS-8-GenericCloud-8.1.1911-20200113.3.x86_64.qcow2
+#
+# https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux_atomic_host/7/html/installation_and_configuration_guide/setting_up_cloud_init
+#
+- name: Ensure that Libvirt is configured
+  hosts: all
+  # roles:
+    # - role: stackhpc.libvirt-host
+    # - role: tcharl.ansible_role_libvirt_host
+  vars_prompt:
+    - name: libvirt_vm_hostname
+      prompt: "hostname (FQDN)? "
+      private: no
+    - name: libvirt_vm_memory_max
+      prompt: "Memory (in MiB)? "
+      default: 2048
+      private: no
+    - name: libvirt_vm_cloudinit_image
+      prompt: "mount which iso-file (alternatives: debian-10-openstack-amd64.qcow2, focal-server-cloudimg-amd64.qcow2, CentOS-8-GenericCloud-8.1.1911-20200113.3.x86_64.qcow2) ? "
+      default: "debian-10.6.0-openstack-amd64.qcow2"
+      private: no
+    - name: libvirt_vm_image_size
+      prompt: "size of Disk (GiB)? "
+      default: 20
+      private: no
+    - name: libvirt_vm_net_mac
+      prompt: "Define MAC for VM (default: no, example: 00:50:56:00:AA:BB)? "
+      default: ""
+      private: no
+    - name: libvirt_vm_image_create
+      prompt: "Create Image/Disk thin (aka sparse, lazy allocated = fast) or thick (creates full file)? "
+      default: thin
+      private: no
+
+  vars:
+    # additional static IP:
+#    libvirt_os_network_interface: |
+#      iface eth0 inet static
+#      address 192.168.0.2
+#      network 192.168.0.0
+#      netmask 255.255.255.0
+#      broadcast 192.168.0.255
+#      gateway 192.168.0.1
+    libvirt_cloudinit_mkiso_cmd: genisoimage
+    # opensuse:
+    # libvirt_cloudinit_mkiso_cmd: mkisofs
+    libvirt_os_default_user: debian
+    libvirt_os_default_userpassword: secretpass
+    # Whether to enable SSH password auth
+    libvirt_os_ssh_pwauth: true
+    libvirt_os_default_rootpassword: secret
+    libvirt_os_ssh_pubkeys:
+    - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCjOTZEXqQRc9keo+y6S+7AXL1W6nV6aswJRsBXSuKeldm0hqA+Ieg/6f9DqhZgFs4umfFcyeR4fqd0wetGiYCMXZHE6oOX/Q25q7jNPnnm/bhIn7wdx1qGGgWhtN1siHlMJHG0HCSFe0OXP5/MImJQ/ns2L97LvNbJErJy5ZONI5pPDrhtmmu/03Grk7za0HChsHA59WR1JAxdFSOhfls+w5m9LmFE56n0GuZsSehGsUtU0TyEbcCzgplzckOBuIMGEMA+xfzrixekwV/OIOUi70qixo2psRvFbPL7unj2WwWb8aoq6AXhNxA92FewUCc8KAqdPsHLc3Dy2TZig0oH3BGpIYef51Wzl31ZMqbo3T6qQyaDgFjOsKxqSH7qEARLzh6tUF4zHbd1zk5uPqJo3zayDM0ggk560wDjg5UMOgSqTZXMLe3zExHlQ+Wd/7wUkC9JlvuTbZoYEXlICRN02tP8eHjr40a5jeuDj9JrPyLQTnRGuemnmxnDwanPmr0= mypubkey
+    libvirt_os_timezone: "Europe/Berlin"
+    libvirt_vm_basedir: "/srv/kvm/images"
+    libvirt_vm_isodir: "/srv/kvm/bootCD"
+    libvirt_vm_cloudimage_iso_path: "{{ libvirt_vm_isodir }}/{{ libvirt_vm_hostname }}-cloudinit.iso"
+    libvirt_vm_cloudimage_source_image: "{{ libvirt_vm_isodir }}/{{ libvirt_vm_cloudinit_image }}"
+    libvirt_vm_imagepath: "{{ libvirt_vm_basedir }}/{{ libvirt_vm_hostname }}.qcow2"
+    # libvirt_vm_memory_max: 8192
+    libvirt_vm_memory_current: "{{ libvirt_vm_memory_max }}"
+    libvirt_vm_cpu_cores: 2
+    libvirt_vm_net_bridge: "br_kvm"
+
+  tasks:
+  - name: Define vm from xml and set autostart
+    virt:
+      command: define
+      xml: "{{ lookup('template', './vm_libvirt_template_cloudinit.xml.j2') }}"
+      autostart: yes
+
+  - name: Check that libvirt_vm_imagepath exists
+    stat:
+      path: "{{ libvirt_vm_imagepath }}"
+    register: libvirt_vm_image_exists
+
+  - name: Create temporary dir to build cloud-init config
+    tempfile:
+      state: directory
+      suffix: cloudinit
+    register: result_tempdir
+    become: true
+
+  - name: Create cloud init meta-data for guest
+    template:
+      src: templates/vm_libvirt_cloudinit_meta_data.j2
+      dest: "{{ result_tempdir.path }}/meta-data"
+      mode: '0644'
+    become: true
+
+  - name: Create cloud init user-data for guest
+    template:
+      src: templates/vm_libvirt_cloudinit_user_data.j2
+      dest: "{{ result_tempdir.path }}/user-data"
+      mode: '0644'
+    become: true
+
+  - name: Make cloud-init iso for guest
+    shell: >
+      {{ libvirt_cloudinit_mkiso_cmd }} -J -l -R -V "cidata" -iso-level 4
+      -o {{ libvirt_vm_cloudimage_iso_path }}
+      {{ result_tempdir.path }}/user-data
+      {{ result_tempdir.path }}/meta-data
+    args:
+      creates: "{{ libvirt_vm_cloudimage_iso_path }}"
+      executable: /bin/bash
+    become: true
+
+  - name: Clean up temporary dir
+    file:
+      path: "{{ result_tempdir.path }}"
+      state: absent
+    become: true
+
+  - name: Copy Image
+    shell: dd if={{ libvirt_vm_cloudimage_source_image }} of="{{ libvirt_vm_imagepath }}" bs=1G count="{{ libvirt_vm_image_size }}"
+    when: not libvirt_vm_image_exists.stat.exists
+
+  - name: Resize disk for VM (thin)
+    command: qemu-img resize -f qcow2 {{ libvirt_vm_imagepath }} {{ libvirt_vm_image_size }}G
+    when: libvirt_vm_image_create == "thin" and not libvirt_vm_image_exists.stat.exists
+
+  - name: Resize disk for VM (thick)
+    command: qemu-img resize --preallocation=falloc -f qcow2 {{ libvirt_vm_imagepath }} {{ libvirt_vm_image_size }}G
+    when: libvirt_vm_image_create == "thick" and not libvirt_vm_image_exists.stat.exists
+
+  - name: Start VM
+    community.libvirt.virt:
+      name: "{{ libvirt_vm_hostname }}"
+      state: running

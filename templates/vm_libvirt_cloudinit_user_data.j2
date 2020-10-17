@@ -1,0 +1,41 @@
+#cloud-config
+network:
+  config: disabled
+
+# Set the default user
+system_info:
+  default_user:
+    name: {{ libvirt_os_default_user }}
+
+# Define user(s)
+chpasswd:
+  list: |
+     {% if libvirt_os_default_rootpassword is defined and libvirt_os_default_rootpassword|length > 0 %}
+     root:{{ libvirt_os_default_rootpassword }}
+     {% endif %}
+     {{ libvirt_os_default_user }}:{{ libvirt_os_default_userpassword }}
+  expire: False
+
+# System settings
+resize_rootfs: True
+ssh_pwauth: "{{ libvirt_os_ssh_pwauth | default(True) }}"
+ssh_authorized_keys:
+{% for key in libvirt_os_ssh_pubkeys %}
+  - {{ key }}
+{% endfor %}
+timezone: {{ libvirt_os_timezone }}
+{% if libvirt_os_default_rootpassword is defined and libvirt_os_default_rootpassword|length > 0 %}
+disable_root: false
+{% endif %}
+
+# Template for any additional commands on boot
+bootcmd:
+  - [ sh, -c, echo "=========bootcmd=========" ]
+
+# Note that the file to disable cloud-init is checked to know when the vm is booted
+runcmd:
+  - [ sh, -c, echo "=========runcmd=========" ]
+  - touch /etc/cloud/cloud-init.disabled
+
+# To know when to log in, if reading console
+final_message: "SYSTEM READY TO LOG IN"
